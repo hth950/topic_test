@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>논술 원고지 OCR 비교</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <strong>논술 OCR Lab</strong>
+        <span id="configStatus">설정 확인 중</span>
+      </div>
+      <section class="folder-picker" aria-label="이미지 폴더 선택">
+        <div class="sidebar-section-head">
+          <strong>이미지 폴더</strong>
+          <span id="folderSummary">0개</span>
+        </div>
+        <select id="folderSelect" aria-label="이미지 폴더"></select>
+        <div class="folder-list" id="folderList"></div>
+      </section>
+      <section class="image-browser" aria-label="답안 이미지 선택">
+        <div class="sidebar-section-head">
+          <strong>이미지</strong>
+          <span id="imageSummary">0장</span>
+        </div>
+        <div class="image-nav">
+          <button id="prevImageBtn" type="button" aria-label="이전 이미지">이전</button>
+          <label>번호<input id="pageJump" type="number" min="1" step="1"></label>
+          <span id="imagePager">0 / 0</span>
+          <button id="nextImageBtn" type="button" aria-label="다음 이미지">다음</button>
+        </div>
+        <input id="imageSearch" type="search" placeholder="필요할 때만 파일명 검색">
+      </section>
+      <div class="image-list" id="imageList"></div>
+      <div class="run-list-wrap">
+        <div class="run-list-head">
+          <strong>최근 Runs</strong>
+          <button id="refreshRunsBtn" type="button">새로고침</button>
+        </div>
+        <div class="run-list" id="runList"></div>
+      </div>
+    </aside>
+
+    <main class="workspace">
+      <header class="toolbar">
+        <div>
+          <h1 id="imageTitle">이미지를 선택하세요</h1>
+          <p id="runStatus">crop을 만들면 단계별 결과가 여기에 표시됩니다.</p>
+        </div>
+        <a class="link-button" href="/outputs/grid-paper.html" target="_blank">기존 20x20 HTML</a>
+      </header>
+
+      <section class="layout-grid">
+        <section class="panel source-panel">
+          <div class="panel-head">
+            <h2>원본과 Crop</h2>
+            <div class="actions">
+              <button id="autoCropBtn" type="button">자동 Crop</button>
+              <button id="manualCropBtn" type="button">좌표 적용</button>
+            </div>
+          </div>
+          <div class="source-frame">
+            <img id="sourceImage" alt="원본 답안 이미지">
+            <div id="cropBox" class="crop-box"></div>
+          </div>
+          <div class="bbox-controls">
+            <label>x<input id="bboxX" type="number" min="0" step="1"></label>
+            <label>y<input id="bboxY" type="number" min="0" step="1"></label>
+            <label>w<input id="bboxW" type="number" min="1" step="1"></label>
+            <label>h<input id="bboxH" type="number" min="1" step="1"></label>
+          </div>
+          <div class="preview-row">
+            <figure>
+              <figcaption>Crop</figcaption>
+              <img id="cropPreview" alt="crop 이미지">
+            </figure>
+            <figure>
+              <figcaption>Red-masked</figcaption>
+              <img id="maskedPreview" alt="빨간펜 제거 이미지">
+            </figure>
+          </div>
+        </section>
+
+        <section class="panel model-panel">
+          <div class="panel-head">
+            <h2>모델 실행</h2>
+            <button id="refreshRunBtn" type="button">새로고침</button>
+          </div>
+          <label class="condition-box">조건
+            <textarea id="userConditions" rows="4" placeholder="추가 조건"></textarea>
+          </label>
+          <div class="model-columns">
+            <form class="model-form" data-provider="chandra">
+              <h3>Chandra OCR</h3>
+              <label>model<input name="model" value="chandra"></label>
+              <label>temperature<input name="temperature" type="number" value="0.3" min="0" max="2" step="0.1"></label>
+              <label>top_p<input name="top_p" type="number" value="0.95" min="0" max="1" step="0.05"></label>
+              <label>max_tokens<input name="max_tokens" type="number" value="4096" min="128" max="20000" step="128"></label>
+              <label>n<input name="n" type="number" value="1" min="1" max="5" step="1"></label>
+              <button type="submit">Chandra 실행</button>
+              <p class="job-line" id="job-chandra">대기</p>
+            </form>
+
+            <form class="model-form" data-provider="gpt">
+              <h3>GPT OCR</h3>
+              <label>model<input name="model" value="gpt-5.5" readonly></label>
+              <label>reasoning
+                <select name="reasoning_effort">
+                  <option value="low" selected>low</option>
+                  <option value="medium">medium</option>
+                  <option value="high">high</option>
+                  <option value="xhigh">xhigh</option>
+                </select>
+              </label>
+              <label>temperature<input name="temperature" type="number" value="0.3" min="0" max="2" step="0.1"></label>
+              <label>top_p<input name="top_p" type="number" value="0.95" min="0" max="1" step="0.05"></label>
+              <label>max_tokens<input name="max_tokens" type="number" value="4096" min="128" max="20000" step="128"></label>
+              <button type="submit" id="gptRunBtn">GPT 실행</button>
+              <p class="job-line" id="job-gpt">대기</p>
+            </form>
+          </div>
+        </section>
+
+        <section class="panel result-panel">
+          <div class="panel-head">
+            <h2>20x20 결과</h2>
+            <div class="tabs">
+              <button class="tab active" data-source="chandra" type="button">Chandra</button>
+              <button class="tab" data-source="gpt" type="button">GPT</button>
+              <button class="tab" data-source="repair" type="button">Repair</button>
+            </div>
+          </div>
+          <div class="result-grid">
+            <div>
+              <div id="matrixEditor" class="matrix-editor"></div>
+              <div class="editor-actions">
+                <button id="saveManualBtn" type="button">편집본 최종 저장</button>
+                <button id="approveSourceBtn" type="button">현재 결과 최종 저장</button>
+              </div>
+              <p id="validationStatus" class="validation">결과 없음</p>
+            </div>
+            <div class="result-side">
+              <div id="htmlPreview" class="paper-preview"></div>
+              <section class="trace-view" aria-label="모델 요청과 응답">
+                <div class="trace-head">
+                  <h3>Input + Prompt = Output</h3>
+                  <p id="traceSummary">결과를 선택하면 요청 흐름이 표시됩니다.</p>
+                </div>
+                <div class="trace-grid">
+                  <div class="trace-card">
+                    <h4>Input Data</h4>
+                    <pre id="traceInput" class="trace-output"></pre>
+                  </div>
+                  <div class="trace-card">
+                    <h4>Prompt</h4>
+                    <pre id="tracePrompt" class="trace-output"></pre>
+                  </div>
+                  <div class="trace-card">
+                    <h4>Request</h4>
+                    <pre id="traceRequest" class="trace-output"></pre>
+                  </div>
+                  <div class="trace-card">
+                    <h4>Raw Output</h4>
+                    <pre id="rawOutput" class="trace-output"></pre>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel repair-panel">
+          <div class="panel-head">
+            <h2>Repair</h2>
+            <div class="actions">
+              <select id="repairSource">
+                <option value="chandra">Chandra 결과</option>
+                <option value="gpt">GPT 결과</option>
+              </select>
+              <select id="repairProvider">
+                <option value="gpt">GPT로 Repair</option>
+                <option value="chandra">Chandra로 Repair</option>
+              </select>
+              <button id="repairBtn" type="button">Repair 실행</button>
+            </div>
+          </div>
+          <p id="job-repair" class="job-line">대기</p>
+          <div class="final-links" id="finalLinks"></div>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <script src="/static/app.js?v=conditions-auto-repair-v4"></script>
+</body>
+</html>
