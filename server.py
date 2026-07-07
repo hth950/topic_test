@@ -31,6 +31,7 @@ ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data"
 RUNS_DIR = ROOT / "runs"
 STATIC_DIR = ROOT / "static"
+WORK_DIR = ROOT / "work"
 RUNS_DIR.mkdir(exist_ok=True)
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
@@ -535,6 +536,68 @@ def api_jobs(folder_id: str | None = None, run_id: str | None = None) -> dict[st
 def api_run(run_id: str) -> dict[str, Any]:
     ensure_run(run_id)
     return run_payload(run_id)
+
+
+@app.get("/api/audit-reports")
+def api_audit_reports() -> dict[str, Any]:
+    base_dir = WORK_DIR / "random10_audit"
+    reports: list[dict[str, Any]] = []
+    if not base_dir.exists():
+        return {"reports": reports}
+    for report_path in sorted(base_dir.glob("*/report.json"), key=lambda path: path.stat().st_mtime, reverse=True):
+        report_id = report_path.parent.name
+        if not re.fullmatch(r"[0-9]{8}-[0-9]{6}", report_id):
+            continue
+        try:
+            data = read_json(report_path)
+        except Exception:
+            continue
+        items = []
+        for item in data.get("items") or []:
+            run_id = item.get("run_id")
+            has_run = isinstance(run_id, str) and (RUNS_DIR / run_id / "metadata.json").exists()
+            items.append(
+                {
+                    "index": item.get("index"),
+                    "image_name": item.get("image_name"),
+                    "folder_name": item.get("folder_name"),
+                    "run_id": run_id if has_run else None,
+                    "flags": item.get("flags") or [],
+                    "render_url": f"/runs/{run_id}/experiments/render_full_grid_chandra.html"
+                    if has_run and (RUNS_DIR / run_id / "experiments" / "render_full_grid_chandra.html").exists()
+                    else None,
+                }
+            )
+        reports.append(
+            {
+                "id": report_id,
+                "created_at": data.get("created_at"),
+                "seed": data.get("seed"),
+                "count": data.get("count"),
+                "summary": data.get("summary") or {},
+                "report_url": f"/reports/random10/{report_id}/REPORT.md",
+                "ocr_results_url": f"/reports/random10/{report_id}/OCR_RESULTS.md"
+                if (report_path.parent / "OCR_RESULTS.md").exists()
+                else None,
+                "contact_sheet_url": f"/reports/random10/{report_id}/contact_sheet.jpg"
+                if (report_path.parent / "contact_sheet.jpg").exists()
+                else None,
+                "items": items,
+            }
+        )
+    return {"reports": reports}
+
+
+@app.get("/reports/random10/{report_id}/{filename}")
+def audit_report_file(report_id: str, filename: str) -> FileResponse:
+    if not re.fullmatch(r"[0-9]{8}-[0-9]{6}", report_id):
+        raise HTTPException(status_code=404, detail="report not found")
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", filename):
+        raise HTTPException(status_code=404, detail="file not found")
+    path = WORK_DIR / "random10_audit" / report_id / filename
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="file not found")
+    return FileResponse(path)
 
 
 @app.get("/runs/{run_id}/{filename}")

@@ -4,6 +4,7 @@ const state = {
   selectedFolderId: null,
   images: [],
   runs: [],
+  auditReports: [],
   jobs: {},
   pollers: {},
   selectedImage: null,
@@ -26,6 +27,7 @@ const el = {
   nextImageBtn: document.querySelector("#nextImageBtn"),
   imageList: document.querySelector("#imageList"),
   runList: document.querySelector("#runList"),
+  auditReportList: document.querySelector("#auditReportList"),
   imageTitle: document.querySelector("#imageTitle"),
   runStatus: document.querySelector("#runStatus"),
   userConditions: document.querySelector("#userConditions"),
@@ -58,11 +60,17 @@ async function boot() {
   renderConfig();
   const folderData = await apiGet("/api/image-folders");
   state.folders = folderData.folders || [];
-  const requestedFolderId = new URLSearchParams(window.location.search).get("folder_id");
+  const params = new URLSearchParams(window.location.search);
+  const requestedFolderId = params.get("folder_id");
+  const requestedRunId = params.get("run_id");
   const requestedFolderExists = state.folders.some((folder) => folder.id === requestedFolderId);
   state.selectedFolderId = requestedFolderExists ? requestedFolderId : folderData.default_folder_id || state.folders[0]?.id || null;
   renderFolders();
+  await refreshAuditReports();
   await loadFolder(state.selectedFolderId);
+  if (requestedRunId) {
+    await loadRun(requestedRunId);
+  }
 }
 
 function bindEvents() {
@@ -70,6 +78,7 @@ function bindEvents() {
   document.querySelector("#manualCropBtn").addEventListener("click", () => cropSelected(readBboxForm()));
   document.querySelector("#refreshRunBtn").addEventListener("click", refreshRun);
   document.querySelector("#refreshRunsBtn").addEventListener("click", refreshRuns);
+  document.querySelector("#refreshReportsBtn").addEventListener("click", refreshAuditReports);
   el.folderSelect.addEventListener("change", () => loadFolder(el.folderSelect.value));
   el.imageSearch.addEventListener("input", () => {
     state.imageFilter = el.imageSearch.value.trim().toLowerCase();
@@ -244,6 +253,13 @@ function setSelectedFolderUrl(folderId) {
   window.history.replaceState(null, "", url);
 }
 
+function setRunUrl(runId, folderId) {
+  const url = new URL(window.location.href);
+  if (folderId) url.searchParams.set("folder_id", folderId);
+  url.searchParams.set("run_id", runId);
+  window.history.replaceState(null, "", url);
+}
+
 function filteredImages() {
   if (!state.imageFilter) return state.images;
   return state.images.filter((image) => {
@@ -301,6 +317,12 @@ async function refreshRuns() {
   syncJobLinesFromRun();
 }
 
+async function refreshAuditReports() {
+  const data = await apiGet("/api/audit-reports");
+  state.auditReports = data.reports || [];
+  renderAuditReports();
+}
+
 function renderRuns() {
   el.runList.innerHTML = "";
   if (!state.runs.length) {
@@ -319,6 +341,46 @@ function renderRuns() {
     button.classList.toggle("active", state.currentRun?.run_id === run.run_id);
     button.addEventListener("click", () => loadRun(run.run_id));
     el.runList.appendChild(button);
+  });
+}
+
+function renderAuditReports() {
+  el.auditReportList.innerHTML = "";
+  if (!state.auditReports.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty-line";
+    empty.textContent = "생성된 리포트 없음";
+    el.auditReportList.appendChild(empty);
+    return;
+  }
+  state.auditReports.forEach((report) => {
+    const card = document.createElement("section");
+    card.className = "audit-report-card";
+    const summary = report.summary || {};
+    const links = [
+      report.ocr_results_url ? `<a href="${escapeHtml(report.ocr_results_url)}" target="_blank">OCR</a>` : "",
+      report.report_url ? `<a href="${escapeHtml(report.report_url)}" target="_blank">Audit</a>` : "",
+      report.contact_sheet_url ? `<a href="${escapeHtml(report.contact_sheet_url)}" target="_blank">Sheet</a>` : "",
+    ].filter(Boolean).join("");
+    card.innerHTML = `
+      <div class="audit-report-head">
+        <strong>${escapeHtml(report.id)}</strong>
+        <span>${escapeHtml(String(report.count || 0))}개 · OK ${escapeHtml(String(summary.ok ?? "-"))}</span>
+      </div>
+      <div class="audit-report-links">${links}</div>
+      <div class="audit-run-list"></div>
+    `;
+    const runList = card.querySelector(".audit-run-list");
+    (report.items || []).forEach((item) => {
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "audit-run-item";
+      row.disabled = !item.run_id;
+      row.innerHTML = `<span>${escapeHtml(item.index)}. ${escapeHtml(item.image_name || "")}</span><small>${escapeHtml(item.run_id || "run 없음")} · ${(item.flags || []).map(escapeHtml).join(", ")}</small>`;
+      row.addEventListener("click", () => loadRun(item.run_id));
+      runList.appendChild(row);
+    });
+    el.auditReportList.appendChild(card);
   });
 }
 
@@ -395,6 +457,7 @@ async function loadRun(runId) {
       state.images = data.images || [];
       renderFolders();
       renderImages();
+      await refreshRuns();
     }
     state.selectedImage = state.images.find((image) => image.id === state.currentRun.image_id) || null;
     renderImages();
@@ -414,6 +477,7 @@ async function loadRun(runId) {
       tab.classList.toggle("active", tab.dataset.source === state.activeSource);
     });
     renderRun();
+    setRunUrl(runId, state.currentRun.folder_id);
     setRunStatus(`run ${runId}`);
   } catch (error) {
     setRunStatus(error.message, true);

@@ -525,6 +525,49 @@ def test_run_payload_includes_experiment_results() -> None:
     assert payload["experiments"]["chandra"]["variants"][0]["cells"][0][0] == "가"
 
 
+def test_audit_reports_api_lists_random_report(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    work_dir = tmp_path / "work"
+    report_dir = work_dir / "random10_audit" / "20260707-135847"
+    report_dir.mkdir(parents=True)
+    image = sample_image()
+    response = client.post("/api/crop", json={"image_id": image.id})
+    run_id = response.json()["run_id"]
+    server.write_json(
+        report_dir / "report.json",
+        {
+            "seed": 1,
+            "count": 1,
+            "created_at": "2026-07-07 13:58:54",
+            "summary": {"ok": 1, "needs_review": 0},
+            "items": [{"index": 1, "image_name": image.name, "folder_name": image.folder_name, "run_id": run_id, "flags": ["ok"]}],
+        },
+    )
+    (report_dir / "REPORT.md").write_text("# report", encoding="utf-8")
+    (report_dir / "OCR_RESULTS.md").write_text("# ocr", encoding="utf-8")
+    (report_dir / "contact_sheet.jpg").write_bytes(b"fake")
+    monkeypatch.setattr(server, "WORK_DIR", work_dir)
+
+    data = client.get("/api/audit-reports").json()
+
+    assert data["reports"][0]["id"] == "20260707-135847"
+    assert data["reports"][0]["items"][0]["run_id"] == run_id
+    assert data["reports"][0]["ocr_results_url"].endswith("/OCR_RESULTS.md")
+    assert data["reports"][0]["contact_sheet_url"].endswith("/contact_sheet.jpg")
+
+
+def test_audit_report_file_is_served(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    work_dir = tmp_path / "work"
+    report_dir = work_dir / "random10_audit" / "20260707-135847"
+    report_dir.mkdir(parents=True)
+    (report_dir / "REPORT.md").write_text("# report", encoding="utf-8")
+    monkeypatch.setattr(server, "WORK_DIR", work_dir)
+
+    response = client.get("/reports/random10/20260707-135847/REPORT.md")
+
+    assert response.status_code == 200
+    assert response.text == "# report"
+
+
 def test_runs_endpoint_lists_recent_runs() -> None:
     response = client.get("/api/runs")
     assert response.status_code == 200

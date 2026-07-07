@@ -21,6 +21,13 @@
         <select id="folderSelect" aria-label="이미지 폴더"></select>
         <div class="folder-list" id="folderList"></div>
       </section>
+      <div class="audit-list-wrap">
+        <div class="run-list-head">
+          <strong>실험 리포트</strong>
+          <button id="refreshReportsBtn" type="button">새로고침</button>
+        </div>
+        <div class="audit-list" id="auditReportList"></div>
+      </div>
       <section class="image-browser" aria-label="답안 이미지 선택">
         <div class="sidebar-section-head">
           <strong>이미지</strong>
@@ -216,6 +223,6 @@
     </main>
   </div>
 
-  <script src="/static/app.js?v=experiment-matrix-v1"></script>
+  <script src="/static/app.js?v=audit-reports-v1"></script>
 </body>
 </html>

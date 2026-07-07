@@ -248,6 +248,14 @@ button:disabled {
   border-top: 1px solid var(--line);
 }
 
+.audit-list-wrap {
+  display: grid;
+  gap: 8px;
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
 .run-list-head {
   display: flex;
   align-items: center;
@@ -300,6 +308,82 @@ button:disabled {
 .run-item.active {
   background: var(--accent-soft);
   border-color: var(--accent);
+}
+
+.audit-list {
+  display: grid;
+  gap: 10px;
+}
+
+.audit-report-card {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+}
+
+.audit-report-head {
+  display: grid;
+  gap: 2px;
+}
+
+.audit-report-head strong {
+  font-size: 13px;
+}
+
+.audit-report-head span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.audit-report-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.audit-report-links a {
+  min-height: 28px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  color: var(--text);
+  text-decoration: none;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.audit-run-list {
+  display: grid;
+  gap: 6px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.audit-run-item {
+  width: 100%;
+  min-height: 42px;
+  display: grid;
+  justify-content: stretch;
+  justify-items: start;
+  gap: 2px;
+  padding: 7px 8px;
+  text-align: left;
+  white-space: normal;
+}
+
+.audit-run-item span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.audit-run-item small {
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .workspace {
