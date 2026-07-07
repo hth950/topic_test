@@ -841,13 +841,20 @@ def align_rows_to_occupancy(rows: list[str], occupancy: list[dict[str, Any]]) ->
     return cells_to_text_rows(cells)
 
 
-def align_cells_to_occupancy(cells: list[list[str]], occupancy: list[dict[str, Any]]) -> list[list[str]]:
+def align_cells_to_occupancy(
+    cells: list[list[str]],
+    occupancy: list[dict[str, Any]],
+    original_lengths: list[int] | None = None,
+) -> list[list[str]]:
     aligned: list[list[str]] = []
     for row_index in range(20):
         row = fit_cells(cells[row_index] if row_index < len(cells) else [])
         occ = occupancy[row_index] if row_index < len(occupancy) else {}
         if not row_has_text(row):
             aligned.append([" "] * 20)
+            continue
+        if should_preserve_model_space_row(row, occ, original_lengths[row_index] if original_lengths and row_index < len(original_lengths) else None):
+            aligned.append(row)
             continue
 
         occupied = occupied_columns(occ)
@@ -864,6 +871,16 @@ def align_cells_to_occupancy(cells: list[list[str]], occupancy: list[dict[str, A
             target[int(first_col) + offset] = normalize_cell_value(cell)
         aligned.append(target)
     return aligned
+
+
+def should_preserve_model_space_row(row: list[str], occ: dict[str, Any], original_length: int | None) -> bool:
+    if original_length != 20 or not has_internal_blank(row):
+        return False
+    counts = occ.get("counts")
+    if not isinstance(counts, list) or not counts:
+        return False
+    states = occupancy_states(occ, 0, 19)
+    return not any(state is False for state in states)
 
 
 def align_row_to_occupancy_pattern(row: list[str], occ: dict[str, Any], occupied: list[int]) -> list[str]:
@@ -2074,7 +2091,7 @@ def normalize_cells(value: Any, occupancy: list[dict[str, Any]] | None = None) -
     cells = cells[:20]
     aligned = False
     if occupancy:
-        cells = align_cells_to_occupancy(cells, occupancy)
+        cells = align_cells_to_occupancy(cells, occupancy, original_lengths)
         aligned = True
     validation = {
         "row_count": len(value) if isinstance(value, list) else 0,

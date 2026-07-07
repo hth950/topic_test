@@ -295,6 +295,24 @@ def test_occupancy_alignment_preserves_model_supplied_spaces() -> None:
     assert cells[0] == row
 
 
+def test_occupancy_alignment_preserves_exact_row_spaces_when_underline_fills_blanks() -> None:
+    row = ["이", "는", " ", "누", "군", "가", "에", "게", " ", "가", "까", "워", "지", "고", " ", "자", "하", "는", " ", "노"]
+    occupancy = [
+        {
+            "first_col": 0,
+            "last_col": 19,
+            "counts": [246, 381, 157, 279, 332, 356, 283, 420, 162, 267, 312, 249, 287, 264, 127, 348, 339, 313, 110, 291],
+            "threshold": 42,
+        }
+    ] + [{"first_col": None, "last_col": None} for _ in range(19)]
+
+    cells, _ = server.normalize_cells([row], occupancy)
+
+    assert cells[0] == row
+    assert cells[0][8] == " "
+    assert "".join(cells[0]).startswith("이는 누군가에게 가까워지고")
+
+
 def test_occupancy_alignment_shifts_model_spaces_to_detected_first_col() -> None:
     row = ["현", "생", " ", "인", "류"] + [" "] * 15
     occupancy = [
