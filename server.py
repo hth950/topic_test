@@ -1107,6 +1107,31 @@ def run_model_experiment_strategy(
     raw_outputs: list[dict[str, Any]] = []
     prompts: list[dict[str, Any]] = []
     for chunk in chunks:
+        chunk_occupancy = occupancy[chunk["row_start"] : chunk["row_start"] + chunk["row_count"]]
+        if occupancy and not chunk_has_handwriting(chunk_occupancy):
+            blank_cells = [[" "] * 20 for _ in range(chunk["row_count"])]
+            all_cells.extend(blank_cells)
+            raw_outputs.append(
+                {
+                    "row_start": chunk["row_start"],
+                    "row_count": chunk["row_count"],
+                    "image_url": f"/runs/{req.run_id}/experiments/{Path(chunk['path']).name}",
+                    "raw_output": "",
+                    "validation": {
+                        "skipped": True,
+                        "reason": "blank_chunk_by_cell_occupancy",
+                        "normalized_shape": [chunk["row_count"], 20],
+                    },
+                }
+            )
+            prompts.append(
+                {
+                    "row_start": chunk["row_start"],
+                    "row_count": chunk["row_count"],
+                    "prompt": "Skipped: cell occupancy detector found no handwriting in this chunk.",
+                }
+            )
+            continue
         prompt = build_experiment_prompt(req.provider, strategy, chunk["row_start"], chunk["row_count"], req.user_conditions)
         if req.provider == "chandra":
             image_uri = image_to_data_uri(prepare_model_image(Image.open(chunk["path"]).convert("RGB")))
@@ -1118,7 +1143,7 @@ def run_model_experiment_strategy(
                 req.settings,
             )
         parsed = parse_model_rows(raw)
-        chunk_cells, chunk_validation = normalize_chunk_cells(parsed, chunk["row_count"], occupancy[chunk["row_start"] : chunk["row_start"] + chunk["row_count"]])
+        chunk_cells, chunk_validation = normalize_chunk_cells(parsed, chunk["row_count"], chunk_occupancy)
         all_cells.extend(chunk_cells)
         raw_outputs.append(
             {
@@ -1143,6 +1168,39 @@ def run_model_experiment_strategy(
         "validation": validation,
         "completed_at": time.time(),
     }
+
+
+def chunk_has_handwriting(chunk_occupancy: list[dict[str, Any]]) -> bool:
+    if not chunk_occupancy:
+        return True
+    total_dark = 0
+    occupied_cells = 0
+    occupied_rows = 0
+    for row in chunk_occupancy:
+        counts = row.get("counts")
+        if isinstance(counts, list):
+            row_counts = [safe_int(count, 0) for count in counts[:20]]
+            total_dark += sum(row_counts)
+            threshold = safe_int(row.get("threshold"), max(20, int(max(row_counts, default=0) * 0.10)))
+            row_occupied_cells = sum(1 for count in row_counts if count >= threshold)
+            occupied_cells += row_occupied_cells
+            if row_occupied_cells:
+                occupied_rows += 1
+        elif row.get("first_col") is not None:
+            occupied_rows += 1
+            first_col = safe_int(row.get("first_col"), 0)
+            last_col = safe_int(row.get("last_col"), first_col)
+            occupied_cells += max(1, last_col - first_col + 1)
+
+    # Blank grid cells can produce a few dark pixels from scan noise or grid bleed.
+    # Requiring a minimum chunk-level score avoids sending empty chunks to VLMs,
+    # which otherwise tend to describe the blank paper instead of returning blanks.
+    min_dark_score = max(250, 240 * len(chunk_occupancy))
+    if total_dark and total_dark < min_dark_score:
+        return False
+    if len(chunk_occupancy) > 1 and occupied_rows <= 1 and occupied_cells < 8:
+        return False
+    return occupied_rows > 0 or occupied_cells > 0
 
 
 def build_experiment_chunks(run_dir: Path, exp_dir: Path, strategy: ExperimentStrategy) -> list[dict[str, Any]]:

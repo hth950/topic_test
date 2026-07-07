@@ -420,6 +420,49 @@ def test_model_experiment_strategy_combines_row_chunks(monkeypatch: pytest.Monke
     assert len(result["trace"]["input"]["chunks"]) == 10
 
 
+def test_model_experiment_strategy_skips_blank_chunks(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    exp_dir = run_dir / "experiments"
+    run_dir.mkdir()
+    exp_dir.mkdir()
+    Image.new("RGB", (200, 400), "white").save(run_dir / "masked.png")
+    calls = 0
+
+    def fake_chandra(image_uri: str, prompt: str, settings: server.ModelSettings) -> str:
+        nonlocal calls
+        calls += 1
+        return '{"rows": [["가"], ["나"], ["다"], ["라"], ["마"]]}'
+
+    monkeypatch.setattr(server, "call_chandra", fake_chandra)
+    occupancy = [
+        {"first_col": 0, "last_col": 4, "counts": [500, 400, 300, 200, 100] + [0] * 15, "threshold": 50}
+        for _ in range(5)
+    ] + [{"first_col": None, "last_col": None, "counts": [0] * 20, "threshold": 50} for _ in range(15)]
+
+    req = server.ExperimentRequest(run_id="abc123abc123", provider="chandra", strategies=["row_5"])
+    result = server.run_model_experiment_strategy(req, run_dir, exp_dir, "row_5", occupancy)
+    raw_outputs = server.json.loads(result["raw_output"])
+
+    assert calls == 1
+    assert result["cells"][0][0] == "가"
+    assert result["cells"][5] == [" "] * 20
+    assert sum(1 for item in raw_outputs if item["validation"].get("skipped")) == 3
+
+
+def test_chunk_has_handwriting_rejects_low_dark_noise() -> None:
+    noisy_blank = [
+        {"first_col": 1, "last_col": 19, "counts": [10] * 20, "threshold": 5}
+        for _ in range(5)
+    ]
+    real_text = [
+        {"first_col": 0, "last_col": 19, "counts": [120] * 20, "threshold": 50}
+        for _ in range(5)
+    ]
+
+    assert server.chunk_has_handwriting(noisy_blank) is False
+    assert server.chunk_has_handwriting(real_text) is True
+
+
 def test_vote_experiment_cells_prefers_majority_then_full_grid() -> None:
     full = [["가"] + [" "] * 19] + [[" "] * 20 for _ in range(19)]
     row_1 = [["나"] + [" "] * 19] + [[" "] * 20 for _ in range(19)]
