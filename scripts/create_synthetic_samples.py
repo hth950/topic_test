@@ -9,11 +9,12 @@ from PIL import Image, ImageDraw, ImageFont
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT_DIR = ROOT / "data" / "samples_synthetic"
-CELL = 48
-MARGIN = 40
+CELL = 44
+GRID_X = 80
+GRID_Y = 680
+PAGE_WIDTH = 1240
+PAGE_HEIGHT = 1754
 GRID = 20
-WIDTH = MARGIN * 2 + CELL * GRID
-HEIGHT = MARGIN * 2 + CELL * GRID
 
 
 def find_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
@@ -44,24 +45,27 @@ def put(row: list[str], start: int, cells: Iterable[str]) -> None:
 
 
 def draw_sample(matrix: list[list[str]], path: Path, red_marks: bool = False) -> None:
-    image = Image.new("RGB", (WIDTH, HEIGHT), "white")
+    image = Image.new("RGB", (PAGE_WIDTH, PAGE_HEIGHT), "white")
     draw = ImageDraw.Draw(image)
     blue = (91, 159, 211)
     pencil = (72, 72, 72)
     red = (214, 52, 59)
 
+    draw.rectangle((48, 52, PAGE_WIDTH - 48, PAGE_HEIGHT - 52), outline=(225, 225, 225), width=2)
+    draw.text((GRID_X, 120), "Synthetic essay-grid OCR fixture", fill=(120, 120, 120), font=SMALL_FONT)
+
     for i in range(GRID + 1):
-        x = MARGIN + i * CELL
-        y = MARGIN + i * CELL
-        draw.line((x, MARGIN, x, MARGIN + GRID * CELL), fill=blue, width=2)
-        draw.line((MARGIN, y, MARGIN + GRID * CELL, y), fill=blue, width=2)
+        x = GRID_X + i * CELL
+        y = GRID_Y + i * CELL
+        draw.line((x, GRID_Y, x, GRID_Y + GRID * CELL), fill=blue, width=2)
+        draw.line((GRID_X, y, GRID_X + GRID * CELL, y), fill=blue, width=2)
 
     for r, row in enumerate(matrix):
         for c, text in enumerate(row):
             if text == " ":
                 continue
-            x0 = MARGIN + c * CELL
-            y0 = MARGIN + r * CELL
+            x0 = GRID_X + c * CELL
+            y0 = GRID_Y + r * CELL
             font = SMALL_FONT if len(text) >= 2 else FONT
             bbox = draw.textbbox((0, 0), text, font=font)
             tw = bbox[2] - bbox[0]
@@ -76,9 +80,9 @@ def draw_sample(matrix: list[list[str]], path: Path, red_marks: bool = False) ->
             )
 
     if red_marks:
-        draw.ellipse((MARGIN + CELL * 13, MARGIN + CELL * 1, MARGIN + CELL * 18, MARGIN + CELL * 4), outline=red, width=8)
-        draw.text((MARGIN + CELL * 12, MARGIN + CELL * 5), "표현 확인", fill=red, font=SMALL_FONT)
-        draw.line((MARGIN + CELL * 2, MARGIN + CELL * 9, MARGIN + CELL * 10, MARGIN + CELL * 9), fill=red, width=6)
+        draw.ellipse((GRID_X + CELL * 13, GRID_Y + CELL * 1, GRID_X + CELL * 18, GRID_Y + CELL * 4), outline=red, width=8)
+        draw.text((GRID_X + CELL * 12, GRID_Y + CELL * 5), "표현 확인", fill=red, font=SMALL_FONT)
+        draw.line((GRID_X + CELL * 2, GRID_Y + CELL * 9, GRID_X + CELL * 10, GRID_Y + CELL * 9), fill=red, width=6)
 
     image.save(path)
 

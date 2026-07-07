@@ -12,13 +12,22 @@ import server
 client = TestClient(server.app)
 
 
+def sample_folder() -> server.ImageFolder:
+    return next(folder for folder in server.list_image_folders() if folder.name == "samples_synthetic")
+
+
+def sample_image(name: str = "clean_grid.png") -> server.ImageRecord:
+    folder = sample_folder()
+    return next(image for image in server.list_images(folder.id) if image.name == name)
+
+
 def test_images_are_discoverable() -> None:
     response = client.get("/api/images")
     assert response.status_code == 200
     images = response.json()["images"]
-    assert len(images) >= 15
-    assert images[0]["width"] == 2480
-    assert images[0]["height"] == 3507
+    assert len(images) >= 3
+    assert images[0]["width"] > 0
+    assert images[0]["height"] > 0
 
 
 def test_image_folders_are_discoverable() -> None:
@@ -30,7 +39,7 @@ def test_image_folders_are_discoverable() -> None:
     folder_ids = {folder["id"] for folder in folders}
 
     assert data["default_folder_id"] in folder_ids
-    assert any(folder["name"] == "논술원고지_답안" for folder in folders)
+    assert any(folder["name"] == "samples_synthetic" for folder in folders)
     assert all(folder["image_count"] > 0 for folder in folders)
 
 
@@ -67,13 +76,13 @@ def test_jobs_are_listed_without_secrets() -> None:
 
 
 def test_detect_grid_bbox_on_sample_image() -> None:
-    image = server.list_images()[0]
+    image = sample_image()
     img = Image.open(image.path).convert("RGB")
     bbox = server.detect_grid_bbox(img)
-    assert 70 <= bbox["x"] <= 150
-    assert 1320 <= bbox["y"] <= 1450
-    assert 1650 <= bbox["width"] <= 1830
-    assert 1800 <= bbox["height"] <= 1980
+    assert 65 <= bbox["x"] <= 95
+    assert 665 <= bbox["y"] <= 705
+    assert 850 <= bbox["width"] <= 910
+    assert 850 <= bbox["height"] <= 910
 
 
 def test_red_mask_removes_red_and_keeps_gray() -> None:
