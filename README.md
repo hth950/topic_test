@@ -45,6 +45,18 @@ export VLLM_API_KEY="vllm api key"
 - `repair.json`, `render_repair.html`
 - `final.json`, `final.html`
 
+## OCR 실험 매트릭스
+
+기본 OCR/repair 흐름과 별도로 같은 crop에 대해 여러 입력 전략을 비교할 수 있습니다.
+
+- `full_grid`: 빨간펜 제거된 20x20 전체 crop을 한 번에 OCR합니다.
+- `row_1`: 20개 행을 한 줄씩 잘라 각 행을 OCR한 뒤 20x20으로 합칩니다.
+- `row_2`: 두 줄씩 잘라 10개 chunk를 OCR한 뒤 합칩니다.
+- `row_5`: 다섯 줄씩 잘라 4개 chunk를 OCR한 뒤 합칩니다.
+- `vote_full_row_1_2`: `full_grid`, `row_1`, `row_2` 결과를 cell 단위로 voting합니다.
+
+웹 UI의 `실험 매트릭스` 패널에서 전략을 선택해 실행하면 `runs/<run_id>/experiments/` 아래에 전략별 입력 이미지, JSON 결과, HTML render, summary가 저장됩니다. 각 전략 카드는 클릭해서 20x20 editor와 `Input + Prompt = Output` trace에서 바로 비교할 수 있습니다.
+
 ## 공개/협업용 문서
 
 - [Hermes Kanban 운영 메모](docs/HERMES_KANBAN.md)

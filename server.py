@@ -212,6 +212,17 @@ class RepairRequest(BaseModel):
     user_conditions: str = Field(default="", max_length=4000)
 
 
+ExperimentStrategy = Literal["full_grid", "row_1", "row_2", "row_5", "vote_full_row_1_2"]
+
+
+class ExperimentRequest(BaseModel):
+    run_id: str
+    provider: Literal["chandra", "gpt"]
+    strategies: list[ExperimentStrategy] = Field(default_factory=lambda: ["full_grid", "row_1", "row_2", "vote_full_row_1_2"])
+    settings: ModelSettings = Field(default_factory=ModelSettings)
+    user_conditions: str = Field(default="", max_length=4000)
+
+
 class FinalizeRequest(BaseModel):
     run_id: str
     source: Literal["chandra", "gpt", "repair", "manual"]
@@ -378,6 +389,7 @@ def api_runs(folder_id: str | None = None, image_id: str | None = None) -> dict[
                 "has_chandra": (run_dir / "ocr_chandra.json").exists(),
                 "has_gpt": (run_dir / "ocr_gpt.json").exists(),
                 "has_repair": (run_dir / "repair.json").exists(),
+                "has_experiments": any((run_dir / "experiments").glob("summary_*.json")) if (run_dir / "experiments").exists() else False,
                 "has_final": (run_dir / "final.json").exists(),
             }
         )
@@ -448,6 +460,22 @@ def api_repair(req: RepairRequest) -> dict[str, Any]:
 
     job_id = create_job("repair", req.model_dump())
     thread = threading.Thread(target=run_repair_job, args=(job_id, req), daemon=True)
+    thread.start()
+    return jobs[job_id]
+
+
+@app.post("/api/experiments")
+def api_experiments(req: ExperimentRequest) -> dict[str, Any]:
+    ensure_run(req.run_id)
+    if req.provider == "gpt" and not DOGOK_PROXY_API_KEY:
+        raise HTTPException(status_code=400, detail="DOGOK_PROXY_API_KEY is not set")
+    if req.provider == "chandra" and not (VLM_PRIMARY_BASE_URL and VLLM_API_KEY):
+        raise HTTPException(status_code=400, detail="VLM endpoint is not configured")
+    if not req.strategies:
+        raise HTTPException(status_code=400, detail="At least one experiment strategy is required")
+
+    job_id = create_job("experiment", req.model_dump())
+    thread = threading.Thread(target=run_experiment_job, args=(job_id, req), daemon=True)
     thread.start()
     return jobs[job_id]
 
@@ -524,6 +552,17 @@ def run_file(run_id: str, filename: str) -> FileResponse:
         raise HTTPException(status_code=404, detail="file not found")
     path = run_dir / filename
     if not path.exists():
+        raise HTTPException(status_code=404, detail="file not found")
+    return FileResponse(path)
+
+
+@app.get("/runs/{run_id}/experiments/{filename}")
+def experiment_file(run_id: str, filename: str) -> FileResponse:
+    run_dir = ensure_run(run_id)
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", filename):
+        raise HTTPException(status_code=404, detail="file not found")
+    path = run_dir / "experiments" / filename
+    if not path.exists() or not path.is_file():
         raise HTTPException(status_code=404, detail="file not found")
     return FileResponse(path)
 
@@ -996,6 +1035,301 @@ def update_job(job_id: str, **values: Any) -> None:
         if job_id in jobs:
             jobs[job_id].update(values)
             jobs[job_id]["updated_at"] = time.time()
+
+
+def run_experiment_job(job_id: str, req: ExperimentRequest) -> None:
+    update_job(job_id, status="running", progress=0.05)
+    try:
+        run_dir = ensure_run(req.run_id)
+        metadata = read_json(run_dir / "metadata.json")
+        occupancy = metadata.get("cell_occupancy", [])
+        exp_dir = run_dir / "experiments"
+        exp_dir.mkdir(exist_ok=True)
+        strategies = expand_experiment_strategies(req.strategies)
+        model_strategies = [strategy for strategy in strategies if strategy != "vote_full_row_1_2"]
+        results: dict[str, dict[str, Any]] = {}
+
+        for index, strategy in enumerate(model_strategies):
+            update_job(job_id, progress=0.08 + (index / max(len(model_strategies), 1)) * 0.72, active_strategy=strategy)
+            result = run_model_experiment_strategy(req, run_dir, exp_dir, strategy, occupancy)
+            results[strategy] = result
+            write_json(exp_dir / f"{strategy}_{req.provider}.json", result)
+            (exp_dir / f"render_{strategy}_{req.provider}.html").write_text(
+                render_grid_html(result["cells"], f"{req.provider} {strategy}"),
+                encoding="utf-8",
+            )
+
+        if "vote_full_row_1_2" in strategies:
+            update_job(job_id, progress=0.87, active_strategy="vote_full_row_1_2")
+            vote = build_vote_experiment_result(req, req.run_id, results)
+            results["vote_full_row_1_2"] = vote
+            write_json(exp_dir / f"vote_full_row_1_2_{req.provider}.json", vote)
+            (exp_dir / f"render_vote_full_row_1_2_{req.provider}.html").write_text(
+                render_grid_html(vote["cells"], f"{req.provider} vote"),
+                encoding="utf-8",
+            )
+
+        summary = {
+            "run_id": req.run_id,
+            "provider": req.provider,
+            "settings": req.settings.model_dump(),
+            "strategies": strategies,
+            "variants": summarize_experiment_variants(req.run_id, req.provider, results),
+            "completed_at": time.time(),
+        }
+        write_json(exp_dir / f"summary_{req.provider}.json", summary)
+        update_job(job_id, status="completed", progress=1, result=summary, active_strategy=None)
+    except Exception as exc:
+        update_job(job_id, status="failed", progress=1, error=str(exc))
+
+
+def expand_experiment_strategies(strategies: list[ExperimentStrategy]) -> list[ExperimentStrategy]:
+    expanded: list[ExperimentStrategy] = []
+    for strategy in strategies:
+        if strategy == "vote_full_row_1_2":
+            for dependency in ("full_grid", "row_1", "row_2"):
+                if dependency not in expanded:
+                    expanded.append(dependency)  # type: ignore[arg-type]
+        if strategy not in expanded:
+            expanded.append(strategy)
+    return expanded
+
+
+def run_model_experiment_strategy(
+    req: ExperimentRequest,
+    run_dir: Path,
+    exp_dir: Path,
+    strategy: ExperimentStrategy,
+    occupancy: list[dict[str, Any]],
+) -> dict[str, Any]:
+    chunks = build_experiment_chunks(run_dir, exp_dir, strategy)
+    all_cells: list[list[str]] = []
+    raw_outputs: list[dict[str, Any]] = []
+    prompts: list[dict[str, Any]] = []
+    for chunk in chunks:
+        prompt = build_experiment_prompt(req.provider, strategy, chunk["row_start"], chunk["row_count"], req.user_conditions)
+        if req.provider == "chandra":
+            image_uri = image_to_data_uri(prepare_model_image(Image.open(chunk["path"]).convert("RGB")))
+            raw = call_chandra(image_uri, prompt, req.settings)
+        else:
+            raw = call_gpt_responses(
+                run_public_experiment_url(req.run_id, Path(chunk["path"]).name),
+                prompt,
+                req.settings,
+            )
+        parsed = parse_model_rows(raw)
+        chunk_cells, chunk_validation = normalize_chunk_cells(parsed, chunk["row_count"], occupancy[chunk["row_start"] : chunk["row_start"] + chunk["row_count"]])
+        all_cells.extend(chunk_cells)
+        raw_outputs.append(
+            {
+                "row_start": chunk["row_start"],
+                "row_count": chunk["row_count"],
+                "image_url": f"/runs/{req.run_id}/experiments/{Path(chunk['path']).name}",
+                "raw_output": raw,
+                "validation": chunk_validation,
+            }
+        )
+        prompts.append({"row_start": chunk["row_start"], "row_count": chunk["row_count"], "prompt": prompt})
+    cells, validation = normalize_cells(all_cells, occupancy)
+    return {
+        "kind": "experiment",
+        "provider": req.provider,
+        "strategy": strategy,
+        "settings": req.settings.model_dump(),
+        "trace": build_experiment_trace(req, strategy, chunks, prompts),
+        "raw_output": json.dumps(raw_outputs, ensure_ascii=False, indent=2),
+        "rows": cells_to_text_rows(cells),
+        "cells": cells,
+        "validation": validation,
+        "completed_at": time.time(),
+    }
+
+
+def build_experiment_chunks(run_dir: Path, exp_dir: Path, strategy: ExperimentStrategy) -> list[dict[str, Any]]:
+    masked = Image.open(run_dir / "masked.png").convert("RGB")
+    if strategy == "full_grid":
+        path = exp_dir / "input_full_grid.png"
+        masked.save(path)
+        return [{"row_start": 0, "row_count": 20, "path": path}]
+
+    rows_per_chunk = {"row_1": 1, "row_2": 2, "row_5": 5}.get(strategy)
+    if rows_per_chunk is None:
+        raise ValueError(f"Unsupported model experiment strategy: {strategy}")
+
+    chunks: list[dict[str, Any]] = []
+    for row_start in range(0, 20, rows_per_chunk):
+        row_count = min(rows_per_chunk, 20 - row_start)
+        y0 = int(masked.height * row_start / 20)
+        y1 = int(masked.height * (row_start + row_count) / 20)
+        pad = max(2, int(masked.height / 20 * 0.08))
+        crop = masked.crop((0, max(0, y0 - pad), masked.width, min(masked.height, y1 + pad)))
+        path = exp_dir / f"input_{strategy}_{row_start + 1:02d}_{row_start + row_count:02d}.png"
+        crop.save(path)
+        chunks.append({"row_start": row_start, "row_count": row_count, "path": path})
+    return chunks
+
+
+def normalize_chunk_cells(parsed: list[str] | list[list[str]], expected_rows: int, occupancy: list[dict[str, Any]]) -> tuple[list[list[str]], dict[str, Any]]:
+    cells, validation = normalize_cells(parsed, occupancy)
+    return cells[:expected_rows], validation
+
+
+def build_experiment_prompt(
+    provider: Literal["chandra", "gpt"],
+    strategy: ExperimentStrategy,
+    row_start: int,
+    row_count: int,
+    user_conditions: str,
+) -> str:
+    base = CHANDRA_OCR_PROMPT if provider == "chandra" else OCR_PROMPT
+    if strategy == "full_grid":
+        strategy_text = (
+            "\nExperiment strategy: full_grid. The image contains the whole 20x20 grid. "
+            "Transcribe every visible row and cell."
+        )
+    else:
+        strategy_text = (
+            f"\nExperiment strategy: {strategy}. The image is a horizontal crop containing only original grid "
+            f"row {row_start + 1} through row {row_start + row_count}. "
+            f"Return exactly {row_count} row(s), each with exactly 20 physical cells. "
+            "Do not include missing rows above or below this crop. Preserve original cell positions within each visible row."
+        )
+    return apply_user_conditions(base.rstrip() + "\n" + strategy_text + "\n", user_conditions)
+
+
+def build_experiment_trace(
+    req: ExperimentRequest,
+    strategy: ExperimentStrategy,
+    chunks: list[dict[str, Any]],
+    prompts: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "kind": "experiment",
+        "provider": req.provider,
+        "strategy": strategy,
+        "input": {
+            "chunks": [
+                {
+                    "row_start": chunk["row_start"],
+                    "row_count": chunk["row_count"],
+                    "image": f"/runs/{req.run_id}/experiments/{Path(chunk['path']).name}",
+                    "public_url": run_public_experiment_url(req.run_id, Path(chunk["path"]).name) if req.provider == "gpt" else None,
+                }
+                for chunk in chunks
+            ],
+            "user_conditions": req.user_conditions,
+        },
+        "prompt": "\n\n--- chunk prompt ---\n\n".join(item["prompt"] for item in prompts),
+        "settings": req.settings.model_dump(),
+        "request_shape": {
+            "strategy": strategy,
+            "provider": req.provider,
+            "calls": len(chunks),
+            "transport": "public image_url" if req.provider == "gpt" else "data URI from experiment chunk",
+        },
+    }
+
+
+def build_vote_experiment_result(req: ExperimentRequest, run_id: str, results: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    cells, vote_stats = vote_experiment_cells(results)
+    validation = {
+        "row_count": 20,
+        "original_lengths": [20] * 20,
+        "valid_original_shape": True,
+        "normalized_shape": [20, 20],
+        "aligned_to_occupancy": False,
+        "vote_stats": vote_stats,
+    }
+    return {
+        "kind": "experiment",
+        "provider": req.provider,
+        "strategy": "vote_full_row_1_2",
+        "settings": req.settings.model_dump(),
+        "trace": {
+            "kind": "experiment_vote",
+            "provider": req.provider,
+            "strategy": "vote_full_row_1_2",
+            "input": {
+                "source_strategies": [key for key in ("full_grid", "row_1", "row_2") if key in results],
+                "rule": "Per-cell majority wins; if there is no majority, prefer full_grid, then row_2, then row_1.",
+                "user_conditions": req.user_conditions,
+            },
+            "prompt": "No model prompt. This is deterministic cell voting over completed experiment variants.",
+            "settings": req.settings.model_dump(),
+            "request_shape": {"strategy": "vote_full_row_1_2", "model_calls": 0},
+        },
+        "raw_output": json.dumps(vote_stats, ensure_ascii=False, indent=2),
+        "rows": cells_to_text_rows(cells),
+        "cells": cells,
+        "validation": validation,
+        "completed_at": time.time(),
+    }
+
+
+def vote_experiment_cells(results: dict[str, dict[str, Any]]) -> tuple[list[list[str]], dict[str, Any]]:
+    order = ["full_grid", "row_2", "row_1"]
+    matrices = {
+        strategy: fit_cells_matrix(result.get("cells") or result.get("rows") or [])
+        for strategy, result in results.items()
+        if strategy in order
+    }
+    voted: list[list[str]] = []
+    disagreements = 0
+    majority_cells = 0
+    fallback_cells = 0
+    for row_index in range(20):
+        row: list[str] = []
+        for col_index in range(20):
+            values = [normalize_cell_value(matrices[strategy][row_index][col_index]) for strategy in order if strategy in matrices]
+            nonblank_values = [value for value in values if value.strip()]
+            unique_values = set(values)
+            if len(unique_values) > 1:
+                disagreements += 1
+            chosen = " "
+            for value in nonblank_values:
+                if nonblank_values.count(value) >= 2:
+                    chosen = value
+                    majority_cells += 1
+                    break
+            else:
+                for strategy in order:
+                    if strategy in matrices:
+                        candidate = normalize_cell_value(matrices[strategy][row_index][col_index])
+                        if candidate.strip():
+                            chosen = candidate
+                            fallback_cells += 1
+                            break
+            row.append(chosen)
+        voted.append(row)
+    return voted, {
+        "source_strategies": [strategy for strategy in order if strategy in matrices],
+        "disagreement_cells": disagreements,
+        "majority_cells": majority_cells,
+        "fallback_cells": fallback_cells,
+    }
+
+
+def summarize_experiment_variants(run_id: str, provider: str, results: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    variants: list[dict[str, Any]] = []
+    for strategy, result in results.items():
+        validation = result.get("validation") or {}
+        variants.append(
+            {
+                "strategy": strategy,
+                "provider": provider,
+                "row_count": len(result.get("cells") or []),
+                "valid_original_shape": validation.get("valid_original_shape"),
+                "vote_stats": validation.get("vote_stats"),
+                "result_path": f"/runs/{run_id}/experiments/{strategy}_{provider}.json",
+                "render_url": f"/runs/{run_id}/experiments/render_{strategy}_{provider}.html",
+                "completed_at": result.get("completed_at"),
+            }
+        )
+    return variants
+
+
+def run_public_experiment_url(run_id: str, filename: str) -> str:
+    return f"{get_public_base_url()}/runs/{run_id}/experiments/{filename}"
 
 
 def run_ocr_job(job_id: str, req: OcrRequest) -> None:
@@ -1784,9 +2118,36 @@ def run_payload(run_id: str) -> dict[str, Any]:
     if (run_dir / "repair.json").exists():
         payload["repair"] = hydrate_result_trace(read_json(run_dir / "repair.json"), run_id, "repair", run_dir)
         payload["repair"]["render_url"] = f"/runs/{run_id}/render_repair.html"
+    payload["experiments"] = load_experiment_payload(run_id, run_dir)
     if (run_dir / "final.json").exists():
         payload["final"] = read_json(run_dir / "final.json")
         payload["final"]["render_url"] = f"/runs/{run_id}/final.html"
+    return payload
+
+
+def load_experiment_payload(run_id: str, run_dir: Path) -> dict[str, Any]:
+    exp_dir = run_dir / "experiments"
+    payload: dict[str, Any] = {}
+    if not exp_dir.exists():
+        return payload
+    for summary_path in sorted(exp_dir.glob("summary_*.json")):
+        provider = summary_path.stem.replace("summary_", "", 1)
+        try:
+            summary = read_json(summary_path)
+        except Exception:
+            continue
+        variants: list[dict[str, Any]] = []
+        for item in summary.get("variants") or []:
+            strategy = item.get("strategy")
+            result_path = exp_dir / f"{strategy}_{provider}.json"
+            if not strategy or not result_path.exists():
+                continue
+            result = read_json(result_path)
+            result["render_url"] = f"/runs/{run_id}/experiments/render_{strategy}_{provider}.html"
+            result["result_url"] = f"/runs/{run_id}/experiments/{strategy}_{provider}.json"
+            variants.append(result)
+        summary["variants"] = variants
+        payload[provider] = summary
     return payload
 
 

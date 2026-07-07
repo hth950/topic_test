@@ -366,6 +366,122 @@ def test_crop_endpoint_creates_run_assets() -> None:
     assert data["grid"]["columns"] == 20
 
 
+def test_experiment_strategy_expansion_adds_vote_dependencies() -> None:
+    assert server.expand_experiment_strategies(["vote_full_row_1_2"]) == [
+        "full_grid",
+        "row_1",
+        "row_2",
+        "vote_full_row_1_2",
+    ]
+
+
+def test_experiment_chunks_split_full_grid_rows(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    exp_dir = run_dir / "experiments"
+    run_dir.mkdir()
+    exp_dir.mkdir()
+    Image.new("RGB", (200, 400), "white").save(run_dir / "masked.png")
+
+    row_chunks = server.build_experiment_chunks(run_dir, exp_dir, "row_1")
+    two_row_chunks = server.build_experiment_chunks(run_dir, exp_dir, "row_2")
+
+    assert len(row_chunks) == 20
+    assert row_chunks[0]["row_start"] == 0
+    assert row_chunks[-1]["row_start"] == 19
+    assert all(Path(chunk["path"]).exists() for chunk in row_chunks)
+    assert len(two_row_chunks) == 10
+    assert two_row_chunks[0]["row_count"] == 2
+
+
+def test_model_experiment_strategy_combines_row_chunks(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    exp_dir = run_dir / "experiments"
+    run_dir.mkdir()
+    exp_dir.mkdir()
+    Image.new("RGB", (200, 400), "white").save(run_dir / "masked.png")
+    calls: list[str] = []
+
+    def fake_chandra(image_uri: str, prompt: str, settings: server.ModelSettings) -> str:
+        calls.append(prompt)
+        row_count = 2
+        rows = [[f"{len(calls):02d}"] + [" "] * 19 for _ in range(row_count)]
+        return '{"rows": ' + server.json.dumps(rows, ensure_ascii=False) + "}"
+
+    monkeypatch.setattr(server, "call_chandra", fake_chandra)
+
+    req = server.ExperimentRequest(run_id="abc123abc123", provider="chandra", strategies=["row_2"])
+    result = server.run_model_experiment_strategy(req, run_dir, exp_dir, "row_2", [])
+
+    assert len(calls) == 10
+    assert result["validation"]["normalized_shape"] == [20, 20]
+    assert result["cells"][0][0] == "01"
+    assert result["cells"][18][0] == "10"
+    assert result["trace"]["request_shape"]["calls"] == 10
+    assert len(result["trace"]["input"]["chunks"]) == 10
+
+
+def test_vote_experiment_cells_prefers_majority_then_full_grid() -> None:
+    full = [["가"] + [" "] * 19] + [[" "] * 20 for _ in range(19)]
+    row_1 = [["나"] + [" "] * 19] + [[" "] * 20 for _ in range(19)]
+    row_2 = [["나"] + [" "] * 19] + [[" "] * 20 for _ in range(19)]
+    cells, stats = server.vote_experiment_cells(
+        {
+            "full_grid": {"cells": full},
+            "row_1": {"cells": row_1},
+            "row_2": {"cells": row_2},
+        }
+    )
+
+    assert cells[0][0] == "나"
+    assert stats["majority_cells"] == 1
+    assert stats["disagreement_cells"] == 1
+
+    cells, stats = server.vote_experiment_cells(
+        {
+            "full_grid": {"cells": full},
+            "row_1": {"cells": [["다"] + [" "] * 19] + [[" "] * 20 for _ in range(19)]},
+        }
+    )
+    assert cells[0][0] == "가"
+    assert stats["fallback_cells"] == 1
+
+
+def test_run_payload_includes_experiment_results() -> None:
+    image = sample_image()
+    response = client.post("/api/crop", json={"image_id": image.id})
+    assert response.status_code == 200
+    run_id = response.json()["run_id"]
+    run_dir = Path(server.RUNS_DIR) / run_id
+    exp_dir = run_dir / "experiments"
+    exp_dir.mkdir()
+    cells = [["가"] + [" "] * 19] + [[" "] * 20 for _ in range(19)]
+    result = {
+        "kind": "experiment",
+        "provider": "chandra",
+        "strategy": "full_grid",
+        "trace": {"kind": "experiment", "strategy": "full_grid"},
+        "raw_output": "raw",
+        "rows": server.cells_to_text_rows(cells),
+        "cells": cells,
+        "validation": {"normalized_shape": [20, 20]},
+    }
+    server.write_json(exp_dir / "full_grid_chandra.json", result)
+    server.write_json(
+        exp_dir / "summary_chandra.json",
+        {
+            "run_id": run_id,
+            "provider": "chandra",
+            "strategies": ["full_grid"],
+            "variants": [{"strategy": "full_grid"}],
+        },
+    )
+
+    payload = client.get(f"/api/runs/{run_id}").json()
+
+    assert payload["experiments"]["chandra"]["variants"][0]["strategy"] == "full_grid"
+    assert payload["experiments"]["chandra"]["variants"][0]["cells"][0][0] == "가"
+
+
 def test_runs_endpoint_lists_recent_runs() -> None:
     response = client.get("/api/runs")
     assert response.status_code == 200

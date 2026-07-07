@@ -9,6 +9,7 @@ const state = {
   selectedImage: null,
   currentRun: null,
   activeSource: "chandra",
+  activeExperiment: null,
   imageFilter: "",
 };
 
@@ -45,6 +46,9 @@ const el = {
   traceRequest: document.querySelector("#traceRequest"),
   validationStatus: document.querySelector("#validationStatus"),
   finalLinks: document.querySelector("#finalLinks"),
+  experimentProvider: document.querySelector("#experimentProvider"),
+  runExperimentsBtn: document.querySelector("#runExperimentsBtn"),
+  experimentResults: document.querySelector("#experimentResults"),
 };
 
 async function boot() {
@@ -82,6 +86,7 @@ function bindEvents() {
   document.querySelector("#saveManualBtn").addEventListener("click", saveManualFinal);
   document.querySelector("#approveSourceBtn").addEventListener("click", approveCurrentSource);
   document.querySelector("#repairBtn").addEventListener("click", runRepair);
+  el.runExperimentsBtn.addEventListener("click", runExperiments);
   document.querySelectorAll(".model-form").forEach((form) => {
     form.addEventListener("submit", (event) => {
       event.preventDefault();
@@ -322,9 +327,10 @@ function formatRunBadges(run) {
   if (run.has_chandra) badges.push("Chandra");
   if (run.has_gpt) badges.push("GPT");
   if (run.has_repair) badges.push("Repair");
+  if (run.has_experiments) badges.push("Experiments");
   if (run.has_final) badges.push("Final");
   trackedJobsForRun(run.run_id).forEach((job) => {
-    const label = job.kind === "repair" ? "Repair" : (job.payload?.provider || "job").toUpperCase();
+    const label = job.kind === "repair" ? "Repair" : job.kind === "experiment" ? "Experiment" : (job.payload?.provider || "job").toUpperCase();
     const percent = Math.round((job.progress || 0) * 100);
     badges.push(`${label} ${job.status} ${percent}%`);
   });
@@ -348,13 +354,13 @@ function syncTrackedJobs(jobs) {
 function ensureJobPolling(job) {
   if (state.pollers[job.id]) return;
   const runId = job.payload?.run_id;
-  const source = job.kind === "repair" ? "repair" : job.payload?.provider;
+  const source = job.kind === "repair" ? "repair" : job.kind === "experiment" ? "experiment" : job.payload?.provider;
   pollJob(job.id, jobLineSelectorForSource(source), async () => {
     await refreshRuns();
     if (state.currentRun?.run_id === runId) {
       state.currentRun = await apiGet(`/api/runs/${runId}`);
       renderRun();
-      if (source) setActiveSource(source);
+      if (source && source !== "experiment") setActiveSource(source);
     }
   }, { runId, source });
 }
@@ -368,13 +374,14 @@ function trackedJobsForRun(runId) {
 
 function trackedJobForSource(runId, source) {
   return trackedJobsForRun(runId).find((job) => {
-    const jobSource = job.kind === "repair" ? "repair" : job.payload?.provider;
+    const jobSource = job.kind === "repair" ? "repair" : job.kind === "experiment" ? "experiment" : job.payload?.provider;
     return jobSource === source;
   });
 }
 
 function jobLineSelectorForSource(source) {
   if (source === "repair") return "#job-repair";
+  if (source === "experiment") return "#job-experiment";
   return `#job-${source}`;
 }
 
@@ -435,6 +442,7 @@ async function selectImage(imageId) {
   el.cropPreview.removeAttribute("src");
   el.maskedPreview.removeAttribute("src");
   renderTrace(null, "chandra");
+  el.experimentResults.innerHTML = `<p class="empty-line">아직 실험 결과 없음</p>`;
   el.finalLinks.innerHTML = "";
   renderEmptyGrid();
   const existingRun = latestRunForImage(imageId) || await fetchLatestRunForImage(imageId);
@@ -516,6 +524,7 @@ function renderRun() {
   positionCropBox();
   syncJobLinesFromRun();
   renderSource(state.activeSource);
+  renderExperiments();
   renderFinalLinks();
 }
 
@@ -523,6 +532,7 @@ function syncJobLinesFromRun() {
   syncJobLine("#job-chandra", "chandra", Boolean(state.currentRun?.ocr?.chandra));
   syncJobLine("#job-gpt", "gpt", Boolean(state.currentRun?.ocr?.gpt));
   syncJobLine("#job-repair", "repair", Boolean(state.currentRun?.repair));
+  syncJobLine("#job-experiment", "experiment", Boolean(Object.keys(state.currentRun?.experiments || {}).length));
 }
 
 function syncJobLine(selector, source, hasResult) {
@@ -616,6 +626,71 @@ async function runRepair() {
     userConditions: currentUserConditions(),
     activateOnComplete: true,
   });
+}
+
+async function runExperiments() {
+  if (!state.currentRun) return;
+  const provider = el.experimentProvider.value;
+  const providerForm = document.querySelector(`.model-form[data-provider="${provider}"]`);
+  const strategies = selectedExperimentStrategies();
+  const line = document.querySelector("#job-experiment");
+  line.classList.remove("error");
+  if (!providerCanRun(provider)) {
+    line.textContent = providerStatusMessage(provider);
+    line.classList.add("error");
+    return;
+  }
+  if (!strategies.length) {
+    line.textContent = "전략을 하나 이상 선택하세요";
+    line.classList.add("error");
+    return;
+  }
+  line.textContent = "요청 생성 중";
+  const targetRunId = state.currentRun.run_id;
+  try {
+    const job = await apiPost("/api/experiments", {
+      run_id: targetRunId,
+      provider,
+      strategies,
+      settings: collectSettings(providerForm),
+      user_conditions: currentUserConditions(),
+    });
+    state.jobs[job.id] = job;
+    renderRuns();
+    pollJob(job.id, "#job-experiment", async () => {
+      await refreshRuns();
+      if (state.currentRun?.run_id === targetRunId) {
+        state.currentRun = await apiGet(`/api/runs/${targetRunId}`);
+        renderRun();
+      }
+    }, { runId: targetRunId, source: "experiment" });
+  } catch (error) {
+    line.textContent = error.message;
+    line.classList.add("error");
+  }
+}
+
+function selectedExperimentStrategies() {
+  return Array.from(document.querySelectorAll('input[name="experimentStrategy"]:checked')).map((input) => input.value);
+}
+
+function providerCanRun(provider) {
+  if (provider === "gpt") {
+    return Boolean(state.config?.gpt_oauth?.configured) && !state.config?.gpt_oauth?.image_warning;
+  }
+  if (provider === "chandra") {
+    return Boolean(state.config?.chandra?.configured);
+  }
+  return false;
+}
+
+function providerStatusMessage(provider) {
+  if (provider === "gpt") {
+    if (!state.config?.gpt_oauth?.configured) return "DOGOK_PROXY_API_KEY 필요";
+    return state.config?.gpt_oauth?.image_warning || "GPT 설정 확인 필요";
+  }
+  if (provider === "chandra") return "Chandra 설정 확인 필요";
+  return "모델 설정 확인 필요";
 }
 
 async function startRepairForRun({ targetRunId, sourceProvider, provider, settings, userConditions, activateOnComplete }) {
@@ -719,7 +794,8 @@ async function pollJob(jobId, selector, onComplete, meta = {}) {
 function formatJobStatus(job) {
   const percent = Math.round((job.progress || 0) * 100);
   const remoteStatus = job.remote_status ? ` · dogok ${job.remote_status}` : "";
-  return `${job.status} ${percent}%${remoteStatus}`;
+  const strategy = job.active_strategy ? ` · ${strategyLabel(job.active_strategy)}` : "";
+  return `${job.status} ${percent}%${remoteStatus}${strategy}`;
 }
 
 function setActiveSource(source) {
@@ -743,6 +819,77 @@ function renderSource(source) {
   renderPaperPreview(cells);
   renderTrace(result, source);
   renderValidation(result.validation);
+}
+
+function renderExperiments() {
+  el.experimentResults.innerHTML = "";
+  const experiments = state.currentRun?.experiments || {};
+  const providers = Object.keys(experiments);
+  if (!providers.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty-line";
+    empty.textContent = "아직 실험 결과 없음";
+    el.experimentResults.appendChild(empty);
+    return;
+  }
+  providers.forEach((provider) => {
+    const group = document.createElement("section");
+    group.className = "experiment-group";
+    const summary = experiments[provider] || {};
+    const variants = summary.variants || [];
+    group.innerHTML = `<h3>${escapeHtml(provider)} · ${variants.length}개 전략</h3>`;
+    const list = document.createElement("div");
+    list.className = "experiment-card-list";
+    variants.forEach((variant) => {
+      const card = document.createElement("article");
+      card.className = "experiment-card";
+      const voteStats = variant.validation?.vote_stats || {};
+      const metric = variant.strategy === "vote_full_row_1_2"
+        ? `disagree ${voteStats.disagreement_cells ?? "-"} · majority ${voteStats.majority_cells ?? "-"}`
+        : `shape ${variant.validation?.normalized_shape?.join("x") || "?"}`;
+      card.innerHTML = `
+        <div>
+          <strong>${escapeHtml(strategyLabel(variant.strategy))}</strong>
+          <small>${escapeHtml(metric)}</small>
+        </div>
+        <div class="experiment-actions">
+          <button type="button" data-provider="${escapeHtml(provider)}" data-strategy="${escapeHtml(variant.strategy)}">결과 보기</button>
+          ${variant.render_url ? `<a href="${escapeHtml(variant.render_url)}" target="_blank">HTML</a>` : ""}
+        </div>
+      `;
+      card.querySelector("button").addEventListener("click", () => renderExperimentResult(provider, variant.strategy));
+      list.appendChild(card);
+    });
+    group.appendChild(list);
+    el.experimentResults.appendChild(group);
+  });
+}
+
+function strategyLabel(strategy) {
+  const labels = {
+    full_grid: "전체 crop",
+    row_1: "1줄씩",
+    row_2: "2줄씩",
+    row_5: "5줄씩",
+    vote_full_row_1_2: "Voting",
+  };
+  return labels[strategy] || strategy;
+}
+
+function renderExperimentResult(provider, strategy) {
+  const variant = experimentVariant(provider, strategy);
+  if (!variant) return;
+  state.activeExperiment = { provider, strategy };
+  renderCells(variant.cells || variant.rows || []);
+  renderPaperPreview(variant.cells || variant.rows || []);
+  renderTrace(variant, `experiment:${strategy}`);
+  renderValidation(variant.validation);
+  setRunStatus(`실험 결과 보기 · ${provider} · ${strategyLabel(strategy)}`);
+}
+
+function experimentVariant(provider, strategy) {
+  const variants = state.currentRun?.experiments?.[provider]?.variants || [];
+  return variants.find((variant) => variant.strategy === strategy) || null;
 }
 
 function renderTrace(result, source) {
@@ -773,6 +920,8 @@ function buildTraceInput(trace, result, source) {
     settings: result.settings || trace.settings || {},
     image: input.image || null,
   };
+  if (trace.strategy || result.strategy) payload.strategy = trace.strategy || result.strategy;
+  if (input.chunks) payload.chunks = input.chunks;
   if (input.source_provider) payload.source_provider = input.source_provider;
   if (input.source_cells) payload.source_cells = input.source_cells;
   if (input.source_cells_json && !input.source_cells) payload.source_cells_json = input.source_cells_json;

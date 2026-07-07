@@ -476,6 +476,82 @@ figure img {
   border-color: var(--accent);
 }
 
+.experiment-panel {
+  grid-column: 1 / -1;
+}
+
+.experiment-options {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(120px, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.experiment-options label {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fbfcfa;
+  color: var(--text);
+}
+
+.experiment-options input {
+  width: auto;
+  min-height: auto;
+}
+
+.experiment-results,
+.experiment-group,
+.experiment-card-list {
+  display: grid;
+  gap: 8px;
+}
+
+.experiment-group h3 {
+  margin-top: 6px;
+}
+
+.experiment-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fbfcfa;
+}
+
+.experiment-card strong,
+.experiment-card small {
+  display: block;
+}
+
+.experiment-card small {
+  color: var(--muted);
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+.experiment-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.experiment-actions a {
+  color: var(--accent);
+  font-size: 12px;
+  text-decoration: none;
+  border-bottom: 1px solid var(--accent);
+}
+
 .result-panel {
   grid-column: 1 / -1;
 }
@@ -661,6 +737,7 @@ figure img {
   .toolbar,
   .panel-head,
   .model-columns,
+  .experiment-options,
   .preview-row,
   .bbox-controls {
     grid-template-columns: 1fr;

@@ -48,8 +48,19 @@
 
 ## 실험 아이디어
 
-- Chandra OCR, GPT-5.5 OCR, GPT repair를 같은 crop으로 비교한다.
+- `full_grid`: Chandra OCR, GPT-5.5 OCR, GPT repair를 같은 전체 crop으로 비교한다.
+- `row_1`: 20x20 crop을 한 줄씩 잘라 20회 OCR한 뒤 합친다. 줄 앞 공백과 쉼표/마침표 cell 위치가 전체 crop보다 잘 보존되는지 확인한다.
+- `row_2`: 두 줄씩 잘라 10회 OCR한 뒤 합친다. 한 줄 crop보다 문맥이 조금 더 살아나는지, 전체 crop보다 cell 위치가 안정적인지 비교한다.
+- `row_5`: 다섯 줄씩 잘라 4회 OCR한 뒤 합친다. 호출 수와 문맥/정렬 품질의 균형점을 확인한다.
+- `vote_full_row_1_2`: 전체 crop, 1줄 crop, 2줄 crop 결과를 cell 단위로 voting한다. 다수결이 없으면 전체 crop, 2줄, 1줄 순서로 fallback한다.
 - Chandra/GPT가 disagree한 cell만 repair 후보로 보낸다.
 - rendered grid screenshot과 crop을 LLM vision으로 비교해 row/col mismatch만 반환하게 한다.
 - 회전, 기울어짐, 연필 농도 저하, 빨간펜 겹침을 synthetic 변형으로 생성해 robustness를 측정한다.
 - 사람이 승인한 final matrix를 regression fixture로 축적한다.
+
+## 실험 결과 확인 기준
+
+- 각 전략의 입력 이미지 chunk, prompt, raw output, parsed cells를 함께 저장한다.
+- `runs/<run_id>/experiments/summary_<provider>.json`에서 전략별 성공/실패와 validation을 비교한다.
+- 웹 UI의 `실험 매트릭스` 패널에서 전략별 HTML render와 20x20 matrix를 바로 열람한다.
+- synthetic 샘플에서는 truth matrix와 cell exact match를 계산하고, 실제 학생 답안에서는 사람이 crop과 matrix를 나란히 보고 승인한다.

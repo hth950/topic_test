@@ -124,6 +124,28 @@
           </div>
         </section>
 
+        <section class="panel experiment-panel">
+          <div class="panel-head">
+            <h2>실험 매트릭스</h2>
+            <div class="actions">
+              <select id="experimentProvider" aria-label="실험 모델">
+                <option value="chandra">Chandra</option>
+                <option value="gpt">GPT</option>
+              </select>
+              <button id="runExperimentsBtn" type="button">선택 실험 실행</button>
+            </div>
+          </div>
+          <div class="experiment-options" aria-label="실험 전략 선택">
+            <label><input type="checkbox" name="experimentStrategy" value="full_grid" checked>전체 crop OCR</label>
+            <label><input type="checkbox" name="experimentStrategy" value="row_1" checked>1줄씩 crop OCR</label>
+            <label><input type="checkbox" name="experimentStrategy" value="row_2" checked>2줄씩 crop OCR</label>
+            <label><input type="checkbox" name="experimentStrategy" value="row_5">5줄씩 crop OCR</label>
+            <label><input type="checkbox" name="experimentStrategy" value="vote_full_row_1_2" checked>전체/1줄/2줄 voting</label>
+          </div>
+          <p id="job-experiment" class="job-line">대기</p>
+          <div id="experimentResults" class="experiment-results"></div>
+        </section>
+
         <section class="panel result-panel">
           <div class="panel-head">
             <h2>20x20 결과</h2>
@@ -194,6 +216,6 @@
     </main>
   </div>
 
-  <script src="/static/app.js?v=conditions-auto-repair-v4"></script>
+  <script src="/static/app.js?v=experiment-matrix-v1"></script>
 </body>
 </html>
