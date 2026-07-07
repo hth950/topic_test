@@ -50,6 +50,12 @@ const el = {
   finalLinks: document.querySelector("#finalLinks"),
   experimentProvider: document.querySelector("#experimentProvider"),
   runExperimentsBtn: document.querySelector("#runExperimentsBtn"),
+  experimentJobPanel: document.querySelector("#experimentJobPanel"),
+  experimentJobState: document.querySelector("#experimentJobState"),
+  experimentJobTarget: document.querySelector("#experimentJobTarget"),
+  experimentProgressFill: document.querySelector("#experimentProgressFill"),
+  experimentProgressText: document.querySelector("#experimentProgressText"),
+  experimentJobStrategy: document.querySelector("#experimentJobStrategy"),
   experimentResults: document.querySelector("#experimentResults"),
 };
 
@@ -597,6 +603,7 @@ function syncJobLinesFromRun() {
   syncJobLine("#job-gpt", "gpt", Boolean(state.currentRun?.ocr?.gpt));
   syncJobLine("#job-repair", "repair", Boolean(state.currentRun?.repair));
   syncJobLine("#job-experiment", "experiment", Boolean(Object.keys(state.currentRun?.experiments || {}).length));
+  renderExperimentJobState();
 }
 
 function syncJobLine(selector, source, hasResult) {
@@ -711,6 +718,9 @@ async function runExperiments() {
   }
   line.textContent = "요청 생성 중";
   const targetRunId = state.currentRun.run_id;
+  const pendingJob = { status: "queued", progress: 0, payload: { run_id: targetRunId, provider, strategies } };
+  setExperimentButtonState(pendingJob);
+  setExperimentPanelState(pendingJob);
   try {
     const job = await apiPost("/api/experiments", {
       run_id: targetRunId,
@@ -720,6 +730,8 @@ async function runExperiments() {
       user_conditions: currentUserConditions(),
     });
     state.jobs[job.id] = job;
+    line.textContent = formatJobStatus(job);
+    renderExperimentJobState(job);
     renderRuns();
     pollJob(job.id, "#job-experiment", async () => {
       await refreshRuns();
@@ -731,6 +743,7 @@ async function runExperiments() {
   } catch (error) {
     line.textContent = error.message;
     line.classList.add("error");
+    renderExperimentJobState({ status: "failed", progress: 1, error: error.message, payload: { run_id: targetRunId, provider, strategies } });
   }
 }
 
@@ -812,7 +825,7 @@ function currentUserConditions() {
 async function pollJob(jobId, selector, onComplete, meta = {}) {
   if (state.pollers[jobId]) return;
   const line = document.querySelector(selector);
-  const timer = window.setInterval(async () => {
+  const pollOnce = async () => {
     try {
       const job = await apiGet(`/api/jobs/${jobId}`);
       state.jobs[jobId] = job;
@@ -820,6 +833,7 @@ async function pollJob(jobId, selector, onComplete, meta = {}) {
         line.textContent = formatJobStatus(job);
         line.classList.toggle("error", job.status === "failed");
       }
+      if (meta.source === "experiment") renderExperimentJobState(job);
       renderRuns();
       if (job.status === "completed") {
         window.clearInterval(timer);
@@ -830,6 +844,7 @@ async function pollJob(jobId, selector, onComplete, meta = {}) {
           line.classList.remove("error");
         }
         await onComplete();
+        if (meta.source === "experiment") renderExperimentJobState();
       }
       if (job.status === "failed") {
         window.clearInterval(timer);
@@ -840,6 +855,7 @@ async function pollJob(jobId, selector, onComplete, meta = {}) {
           line.classList.add("error");
         }
         await refreshRuns();
+        if (meta.source === "experiment") renderExperimentJobState(job);
       }
     } catch (error) {
       window.clearInterval(timer);
@@ -850,16 +866,128 @@ async function pollJob(jobId, selector, onComplete, meta = {}) {
         line.classList.add("error");
       }
       await refreshRuns();
+      if (meta.source === "experiment") renderExperimentJobState({ status: "failed", progress: 1, error: error.message, payload: { run_id: meta.runId } });
     }
-  }, 1500);
+  };
+  const timer = window.setInterval(pollOnce, 1500);
   state.pollers[jobId] = timer;
+  pollOnce();
 }
 
 function formatJobStatus(job) {
   const percent = Math.round((job.progress || 0) * 100);
   const remoteStatus = job.remote_status ? ` · dogok ${job.remote_status}` : "";
   const strategy = job.active_strategy ? ` · ${strategyLabel(job.active_strategy)}` : "";
-  return `${job.status} ${percent}%${remoteStatus}${strategy}`;
+  const chunk = formatJobChunk(job);
+  return `${job.status} ${percent}%${remoteStatus}${strategy}${chunk}`;
+}
+
+function formatJobChunk(job) {
+  const chunk = job.active_chunk || {};
+  if (!chunk.row_count) return "";
+  const rowStart = Number(chunk.row_start || 0) + 1;
+  const rowEnd = rowStart + Number(chunk.row_count || 1) - 1;
+  const chunkIndex = chunk.index && chunk.total ? ` ${chunk.index}/${chunk.total}` : "";
+  return ` · row ${rowStart}-${rowEnd}${chunkIndex}`;
+}
+
+function renderExperimentJobState(job = null) {
+  const currentJob = job && (!state.currentRun || job.payload?.run_id === state.currentRun.run_id)
+    ? job
+    : state.currentRun
+      ? trackedJobForSource(state.currentRun.run_id, "experiment")
+      : null;
+  const experiments = state.currentRun?.experiments || {};
+  const providers = Object.keys(experiments);
+  const hasResult = Boolean(providers.length);
+  if (currentJob) {
+    setExperimentButtonState(currentJob);
+    setExperimentPanelState(currentJob);
+    return;
+  }
+  if (hasResult) {
+    setExperimentButtonState(null);
+    setExperimentPanelState({
+      status: "completed",
+      progress: 1,
+      payload: {
+        run_id: state.currentRun?.run_id,
+        provider: providers.join(", "),
+        strategies: completedExperimentStrategies(experiments),
+      },
+    });
+    return;
+  }
+  setExperimentButtonState(null);
+  setExperimentPanelState(null);
+}
+
+function setExperimentButtonState(job) {
+  if (!el.runExperimentsBtn) return;
+  const isRunning = job && ["queued", "running"].includes(job.status);
+  el.runExperimentsBtn.disabled = Boolean(isRunning);
+  if (isRunning) {
+    const percent = Math.round((job.progress || 0) * 100);
+    el.runExperimentsBtn.textContent = `실험 실행 중 ${percent}%`;
+  } else {
+    el.runExperimentsBtn.textContent = "선택 실험 실행";
+  }
+}
+
+function setExperimentPanelState(job) {
+  if (!el.experimentJobPanel) return;
+  const percent = Math.round(((job?.progress || 0) * 100));
+  const status = job?.status || "idle";
+  const isFailed = status === "failed";
+  el.experimentJobPanel.classList.toggle("is-idle", !job);
+  el.experimentJobPanel.classList.toggle("is-running", ["queued", "running"].includes(status));
+  el.experimentJobPanel.classList.toggle("is-failed", isFailed);
+  el.experimentJobState.textContent = isFailed ? (job.error || "실패") : statusLabel(status);
+  el.experimentJobTarget.textContent = formatExperimentJobTarget(job);
+  el.experimentProgressFill.style.width = `${percent}%`;
+  el.experimentProgressText.textContent = `${percent}%`;
+  el.experimentJobStrategy.textContent = formatExperimentJobStrategy(job);
+}
+
+function statusLabel(status) {
+  const labels = {
+    idle: "대기",
+    queued: "요청 생성 중",
+    running: "실행 중",
+    completed: "완료",
+    failed: "실패",
+  };
+  return labels[status] || status;
+}
+
+function formatExperimentJobTarget(job) {
+  if (!job) return "-";
+  const provider = job.payload?.provider || el.experimentProvider?.value || "-";
+  const runId = job.payload?.run_id || state.currentRun?.run_id || "-";
+  return `${provider} · ${runId}`;
+}
+
+function formatExperimentJobStrategy(job) {
+  if (!job) return "-";
+  const chunk = formatJobChunk(job).replace(/^ · /, "");
+  const active = job.active_strategy ? strategyLabel(job.active_strategy) : "";
+  const strategies = (job.payload?.strategies || []).map(strategyLabel).join(", ");
+  if (active && chunk) return `${active} · ${chunk}`;
+  if (active) return active;
+  return strategies || "-";
+}
+
+function completedExperimentStrategies(experiments) {
+  const strategies = [];
+  Object.values(experiments || {}).forEach((summary) => {
+    (summary.strategies || []).forEach((strategy) => {
+      if (!strategies.includes(strategy)) strategies.push(strategy);
+    });
+    (summary.variants || []).forEach((variant) => {
+      if (variant.strategy && !strategies.includes(variant.strategy)) strategies.push(variant.strategy);
+    });
+  });
+  return strategies;
 }
 
 function setActiveSource(source) {

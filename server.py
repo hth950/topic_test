@@ -1113,8 +1113,10 @@ def run_experiment_job(job_id: str, req: ExperimentRequest) -> None:
         results: dict[str, dict[str, Any]] = {}
 
         for index, strategy in enumerate(model_strategies):
-            update_job(job_id, progress=0.08 + (index / max(len(model_strategies), 1)) * 0.72, active_strategy=strategy)
-            result = run_model_experiment_strategy(req, run_dir, exp_dir, strategy, occupancy)
+            strategy_start = 0.08 + (index / max(len(model_strategies), 1)) * 0.72
+            strategy_span = 0.72 / max(len(model_strategies), 1)
+            update_job(job_id, progress=strategy_start, active_strategy=strategy, active_chunk=None)
+            result = run_model_experiment_strategy(req, run_dir, exp_dir, strategy, occupancy, job_id, strategy_start, strategy_span)
             results[strategy] = result
             write_json(exp_dir / f"{strategy}_{req.provider}.json", result)
             (exp_dir / f"render_{strategy}_{req.provider}.html").write_text(
@@ -1123,7 +1125,7 @@ def run_experiment_job(job_id: str, req: ExperimentRequest) -> None:
             )
 
         if "vote_full_row_1_2" in strategies:
-            update_job(job_id, progress=0.87, active_strategy="vote_full_row_1_2")
+            update_job(job_id, progress=0.87, active_strategy="vote_full_row_1_2", active_chunk=None)
             vote = build_vote_experiment_result(req, req.run_id, results)
             results["vote_full_row_1_2"] = vote
             write_json(exp_dir / f"vote_full_row_1_2_{req.provider}.json", vote)
@@ -1164,12 +1166,27 @@ def run_model_experiment_strategy(
     exp_dir: Path,
     strategy: ExperimentStrategy,
     occupancy: list[dict[str, Any]],
+    job_id: str | None = None,
+    progress_start: float = 0,
+    progress_span: float = 0,
 ) -> dict[str, Any]:
     chunks = build_experiment_chunks(run_dir, exp_dir, strategy)
     all_cells: list[list[str]] = []
     raw_outputs: list[dict[str, Any]] = []
     prompts: list[dict[str, Any]] = []
-    for chunk in chunks:
+    for chunk_index, chunk in enumerate(chunks):
+        if job_id:
+            update_job(
+                job_id,
+                progress=progress_start + (chunk_index / max(len(chunks), 1)) * progress_span,
+                active_strategy=strategy,
+                active_chunk={
+                    "index": chunk_index + 1,
+                    "total": len(chunks),
+                    "row_start": chunk["row_start"],
+                    "row_count": chunk["row_count"],
+                },
+            )
         chunk_occupancy = occupancy[chunk["row_start"] : chunk["row_start"] + chunk["row_count"]]
         if occupancy and not chunk_has_handwriting(chunk_occupancy):
             blank_cells = [[" "] * 20 for _ in range(chunk["row_count"])]
@@ -1218,6 +1235,18 @@ def run_model_experiment_strategy(
             }
         )
         prompts.append({"row_start": chunk["row_start"], "row_count": chunk["row_count"], "prompt": prompt})
+        if job_id:
+            update_job(
+                job_id,
+                progress=progress_start + ((chunk_index + 1) / max(len(chunks), 1)) * progress_span,
+                active_strategy=strategy,
+                active_chunk={
+                    "index": chunk_index + 1,
+                    "total": len(chunks),
+                    "row_start": chunk["row_start"],
+                    "row_count": chunk["row_count"],
+                },
+            )
     cells, validation = normalize_cells(all_cells, occupancy)
     return {
         "kind": "experiment",

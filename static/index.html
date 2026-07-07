@@ -149,7 +149,26 @@
             <label><input type="checkbox" name="experimentStrategy" value="row_5">5줄씩 crop OCR</label>
             <label><input type="checkbox" name="experimentStrategy" value="vote_full_row_1_2" checked>전체/1줄/2줄 voting</label>
           </div>
-          <p id="job-experiment" class="job-line">대기</p>
+          <div id="experimentJobPanel" class="job-detail-panel is-idle" aria-live="polite">
+            <div class="job-detail-main">
+              <span>상태</span>
+              <strong id="experimentJobState">대기</strong>
+            </div>
+            <div class="job-detail-main">
+              <span>작업</span>
+              <strong id="experimentJobTarget">-</strong>
+            </div>
+            <div class="job-detail-progress">
+              <span>진행</span>
+              <div class="progress-track"><span id="experimentProgressFill"></span></div>
+              <strong id="experimentProgressText">0%</strong>
+            </div>
+            <div class="job-detail-main">
+              <span>전략</span>
+              <strong id="experimentJobStrategy">-</strong>
+            </div>
+          </div>
+          <p id="job-experiment" class="job-line job-line-strong">대기</p>
           <div id="experimentResults" class="experiment-results"></div>
         </section>
 
@@ -223,6 +242,6 @@
     </main>
   </div>
 
-  <script src="/static/app.js?v=audit-reports-v1"></script>
+  <script src="/static/app.js?v=experiment-progress-v1"></script>
 </body>
 </html>

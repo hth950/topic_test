@@ -588,6 +588,78 @@ figure img {
   min-height: auto;
 }
 
+.job-detail-panel {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.8fr) minmax(180px, 1fr) minmax(260px, 1.3fr) minmax(220px, 1.2fr);
+  gap: 8px;
+  align-items: stretch;
+  margin-bottom: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fbfcfa;
+}
+
+.job-detail-panel.is-running {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.job-detail-panel.is-failed {
+  border-color: var(--warn);
+}
+
+.job-detail-main,
+.job-detail-progress {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.job-detail-main span,
+.job-detail-progress span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.job-detail-main strong,
+.job-detail-progress strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.progress-track {
+  overflow: hidden;
+  width: 100%;
+  height: 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--surface);
+}
+
+.progress-track span {
+  display: block;
+  width: 0;
+  height: 100%;
+  background: var(--accent);
+  transition: width 160ms ease;
+}
+
+.job-line-strong {
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  margin: 0 0 10px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  font-weight: 600;
+}
+
 .experiment-results,
 .experiment-group,
 .experiment-card-list {
@@ -803,7 +875,8 @@ figure img {
 
   .layout-grid,
   .result-grid,
-  .trace-grid {
+  .trace-grid,
+  .job-detail-panel {
     grid-template-columns: 1fr;
   }
 
