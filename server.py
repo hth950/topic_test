@@ -1820,6 +1820,7 @@ def call_gpt_responses(image_url: str, prompt: str, settings: ModelSettings, job
             "and now preserves image inputs, but the image URL still must be fetchable by the upstream model. "
             "Use a public HTTPS PUBLIC_BASE_URL."
         )
+    verify_gpt_image_url_fetchable(image_url)
     headers = {"Authorization": f"Bearer {DOGOK_PROXY_API_KEY}", "Content-Type": "application/json"}
     body = {
         "model": GPT_OAUTH_DEFAULT_MODEL,
@@ -1867,6 +1868,25 @@ def call_gpt_responses(image_url: str, prompt: str, settings: ModelSettings, job
             raise RuntimeError(f"GPT OAuth response {status}: {error_text}")
         time.sleep(2)
     raise RuntimeError("GPT OAuth polling timed out")
+
+
+def verify_gpt_image_url_fetchable(image_url: str) -> None:
+    try:
+        response = requests.get(image_url, stream=True, timeout=10)
+        try:
+            if response.status_code >= 400:
+                raise RuntimeError(f"HTTP {response.status_code}")
+            iterator = response.iter_content(chunk_size=16)
+            first_chunk = next(iterator, b"")
+            if not first_chunk:
+                raise RuntimeError("empty response")
+        finally:
+            response.close()
+    except Exception as exc:
+        raise RuntimeError(
+            "GPT image URL preflight failed. PUBLIC_BASE_URL must be reachable and must serve the crop image. "
+            f"image_url={image_url} error={exc}"
+        ) from exc
 
 
 def extract_output_text(data: dict[str, Any]) -> str:

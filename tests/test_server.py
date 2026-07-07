@@ -591,11 +591,19 @@ def test_gpt_request_forces_model_and_normalizes_reasoning(monkeypatch: pytest.M
         def json(self) -> dict:
             return self.payload
 
+        def iter_content(self, chunk_size: int):
+            yield b"image-bytes"
+
+        def close(self) -> None:
+            return None
+
     def fake_post(url: str, headers: dict, json: dict, timeout: int) -> FakeResponse:
         calls.append(json)
         return FakeResponse({"id": "resp_test"})
 
-    def fake_get(url: str, headers: dict, timeout: int) -> FakeResponse:
+    def fake_get(url: str, **kwargs) -> FakeResponse:
+        if url == "https://example.com/crop.png":
+            return FakeResponse({})
         return FakeResponse({"status": "completed", "output_text": "ok"})
 
     monkeypatch.setattr(server, "PUBLIC_BASE_URL", "https://example.com")
@@ -606,6 +614,19 @@ def test_gpt_request_forces_model_and_normalizes_reasoning(monkeypatch: pytest.M
     assert server.call_gpt_responses("https://example.com/crop.png", "prompt", settings) == "ok"
     assert calls[0]["model"] == "gpt-5.5"
     assert calls[0]["reasoning_effort"] == "low"
+
+
+def test_gpt_image_preflight_reports_unreachable_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeResponse:
+        status_code = 404
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(server.requests, "get", lambda *args, **kwargs: FakeResponse())
+
+    with pytest.raises(RuntimeError, match="GPT image URL preflight failed"):
+        server.verify_gpt_image_url_fetchable("https://example.com/missing.png")
 
 
 def test_repair_prompt_preserves_json_schema_braces() -> None:

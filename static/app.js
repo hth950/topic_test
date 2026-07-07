@@ -73,7 +73,7 @@ async function boot() {
   state.selectedFolderId = requestedFolderExists ? requestedFolderId : folderData.default_folder_id || state.folders[0]?.id || null;
   renderFolders();
   await refreshAuditReports();
-  await loadFolder(state.selectedFolderId);
+  await loadFolder(state.selectedFolderId, { selectFirst: !requestedRunId });
   if (requestedRunId) {
     await loadRun(requestedRunId);
   }
@@ -139,7 +139,8 @@ function renderConfig() {
   document.querySelector('form[data-provider="gpt"] input[name="model"]').value = state.config.gpt_oauth.default_model;
 }
 
-async function loadFolder(folderId) {
+async function loadFolder(folderId, options = {}) {
+  const selectFirst = options.selectFirst !== false;
   if (!folderId) {
     state.images = [];
     state.runs = [];
@@ -165,11 +166,11 @@ async function loadFolder(folderId) {
   state.images = data.images || [];
   renderImages();
   await refreshRuns();
-  if (state.images.length > 0) {
+  if (selectFirst && state.images.length > 0) {
     await selectImage(state.images[0].id);
   } else {
     renderEmptyGrid();
-    setRunStatus("선택한 폴더에 이미지 없음", true);
+    setRunStatus(state.images.length ? "run 불러오는 중" : "선택한 폴더에 이미지 없음", !state.images.length);
   }
 }
 
