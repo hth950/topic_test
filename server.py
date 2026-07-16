@@ -57,7 +57,8 @@ load_dotenv(ROOT / ".env")
 GPT_OAUTH_BASE_URL = os.getenv("GPT_OAUTH_BASE_URL", "http://192.168.0.16:31835").rstrip("/")
 DOGOK_PROXY_API_KEY = os.getenv("DOGOK_PROXY_API_KEY", "")
 GPT_OAUTH_DEFAULT_MODEL = "gpt-5.5"
-GPT_REASONING_EFFORTS = {"low", "medium", "high", "xhigh"}
+GPT_OAUTH_MODELS = ("gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna")
+GPT_REASONING_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 TRAILING_CELL_PUNCTUATION = {".", ","}
 PROPER_NOUN_CONTEXT_NOUNS = {
     "행동",
@@ -254,6 +255,8 @@ def config() -> dict[str, Any]:
             "base_url": GPT_OAUTH_BASE_URL,
             "configured": bool(DOGOK_PROXY_API_KEY),
             "default_model": GPT_OAUTH_DEFAULT_MODEL,
+            "models": list(GPT_OAUTH_MODELS),
+            "reasoning_efforts": list(GPT_REASONING_EFFORTS),
             "public_base_url": public_base_url,
             "image_warning": gpt_image_warning,
         },
@@ -1674,7 +1677,7 @@ def build_request_shape(provider: Literal["gpt", "chandra"], prompt: str, settin
             "method": "POST",
             "path": "/v1/responses",
             "body": {
-                "model": GPT_OAUTH_DEFAULT_MODEL,
+                "model": normalize_gpt_model(settings_dict.get("model")),
                 "input": [
                     {
                         "role": "user",
@@ -1829,6 +1832,11 @@ def normalize_gpt_reasoning_effort(value: str | None) -> str:
     return effort if effort in GPT_REASONING_EFFORTS else "low"
 
 
+def normalize_gpt_model(value: str | None) -> str:
+    model = (value or GPT_OAUTH_DEFAULT_MODEL).strip()
+    return model if model in GPT_OAUTH_MODELS else GPT_OAUTH_DEFAULT_MODEL
+
+
 def call_gpt_responses(image_url: str, prompt: str, settings: ModelSettings, job_id: str | None = None) -> str:
     warning = gpt_image_url_warning(get_public_base_url())
     if warning:
@@ -1839,8 +1847,9 @@ def call_gpt_responses(image_url: str, prompt: str, settings: ModelSettings, job
         )
     verify_gpt_image_url_fetchable(image_url)
     headers = {"Authorization": f"Bearer {DOGOK_PROXY_API_KEY}", "Content-Type": "application/json"}
+    model = normalize_gpt_model(settings.model)
     body = {
-        "model": GPT_OAUTH_DEFAULT_MODEL,
+        "model": model,
         "input": [
             {
                 "role": "user",

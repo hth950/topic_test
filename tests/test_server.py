@@ -596,7 +596,7 @@ def test_runs_endpoint_lists_recent_runs() -> None:
         assert "has_gpt" in data["runs"][0]
 
 
-def test_gpt_request_forces_model_and_normalizes_reasoning(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_gpt_request_uses_selected_model_and_normalizes_reasoning(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[dict] = []
 
     class FakeResponse:
@@ -628,10 +628,26 @@ def test_gpt_request_forces_model_and_normalizes_reasoning(monkeypatch: pytest.M
     monkeypatch.setattr(server.requests, "post", fake_post)
     monkeypatch.setattr(server.requests, "get", fake_get)
 
-    settings = server.ModelSettings(model="gpt-4o", reasoning_effort="invalid")
+    settings = server.ModelSettings(model="gpt-5.6-terra", reasoning_effort="invalid")
     assert server.call_gpt_responses("https://example.com/crop.png", "prompt", settings) == "ok"
-    assert calls[0]["model"] == "gpt-5.5"
+    assert calls[0]["model"] == "gpt-5.6-terra"
     assert calls[0]["reasoning_effort"] == "low"
+
+
+def test_gpt_model_and_effort_options_are_exposed() -> None:
+    response = client.get("/api/config")
+    assert response.status_code == 200
+    config = response.json()["gpt_oauth"]
+    assert "gpt-5.6-sol" in config["models"]
+    assert "gpt-5.6-terra" in config["models"]
+    assert "gpt-5.6-luna" in config["models"]
+    assert "max" in config["reasoning_efforts"]
+
+
+def test_invalid_gpt_model_falls_back_to_default() -> None:
+    assert server.normalize_gpt_model("gpt-4o") == "gpt-5.5"
+    assert server.normalize_gpt_model("gpt-5.6-luna") == "gpt-5.6-luna"
+    assert server.normalize_gpt_reasoning_effort("max") == "max"
 
 
 def test_gpt_image_preflight_reports_unreachable_url(monkeypatch: pytest.MonkeyPatch) -> None:

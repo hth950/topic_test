@@ -136,7 +136,29 @@ function renderConfig() {
     document.querySelector("#job-gpt").classList.add("error");
   }
   document.querySelector('form[data-provider="chandra"] input[name="model"]').value = state.config.chandra.default_model;
-  document.querySelector('form[data-provider="gpt"] input[name="model"]').value = state.config.gpt_oauth.default_model;
+  populateSelectOptions(
+    document.querySelector('form[data-provider="gpt"] select[name="model"]'),
+    state.config.gpt_oauth.models || [state.config.gpt_oauth.default_model],
+    state.config.gpt_oauth.default_model,
+  );
+  populateSelectOptions(
+    document.querySelector('form[data-provider="gpt"] select[name="reasoning_effort"]'),
+    state.config.gpt_oauth.reasoning_efforts || ["low", "medium", "high", "xhigh", "max"],
+    "low",
+  );
+}
+
+function populateSelectOptions(select, values, selectedValue) {
+  if (!select) return;
+  const currentValue = select.value || selectedValue;
+  select.innerHTML = "";
+  values.forEach((value) => {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = value;
+    option.selected = value === currentValue || (!values.includes(currentValue) && value === selectedValue);
+    select.appendChild(option);
+  });
 }
 
 async function loadFolder(folderId, options = {}) {
